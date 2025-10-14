@@ -8,7 +8,7 @@
  - Add the .env file
  
  - Run this in the bash terminal
-  ` "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --remote-debugging-port=9222 --use `
+  ` "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --remote-debugging-port=9222`
  The Edge Browser will open up, on that search and go to the relevent site.
 
  - Open another terminal, and run this command from the repository root.
