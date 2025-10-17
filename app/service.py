@@ -4,7 +4,6 @@ from app.database import get_session
 from app.models import MetadataRaw, RawDocument
 from app.pdf_collector import fetch_pdf_text
 from app.logger_config import get_logger
-import asyncio
 import json
 from app.analyzer import process_raw_documents
 
@@ -86,33 +85,25 @@ def store_batch_records(metadata_id: int, data: list[dict], pdf_link_key: str):
     - Stores payload and extracted PDF text.
     """
 
-    async def process_record(record):
-        pdf_url = record.get(pdf_link_key)
-        if not pdf_url:
-            raise ValueError(f"Missing PDF URL in record (key='{pdf_link_key}')")
-
-        logger.info(f"Fetching PDF for record: {pdf_url}")
-        pdf_info = await fetch_pdf_text(pdf_url)
-        logger.info(f"Extracted {pdf_info.pages} pages from PDF: {pdf_url}")
-
-        return {
-            "payload": json.dumps(record),
-            "pdf_uri": pdf_url,
-            "pdf_raw": pdf_info.text,
-        }
-
-    async def process_all():
-        results = []
+    try:
+        processed = []
         for record in data:
             try:
-                result = await process_record(record)
-                results.append(result)
+                pdf_url = record.get(pdf_link_key)
+                if not pdf_url:
+                    raise ValueError(f"Missing PDF URL in record (key='{pdf_link_key}')")
+
+                logger.info(f"Fetching PDF for record: {pdf_url}")
+                pdf_info = fetch_pdf_text(pdf_url)
+                logger.info(f"Extracted {pdf_info.pages} pages from PDF: {pdf_url}")
+
+                processed.append({
+                    "payload": json.dumps(record),
+                    "pdf_uri": pdf_url,
+                    "pdf_raw": pdf_info.text,
+                })
             except Exception as e:
                 logger.warning(f"Skipping record due to PDF error: {e}")
-        return results
-
-    try:
-        processed = asyncio.run(process_all())
 
         with get_session() as session:
             for entry in processed:

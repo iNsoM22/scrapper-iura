@@ -16,32 +16,32 @@ class Document(Base):
     )
 
     reference_id: Mapped[str] = mapped_column(
-        String(100), unique=True, nullable=False, index=True
+        Text, unique=True, nullable=False, index=True
     )
 
-    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
 
     doc_type: Mapped[str] = mapped_column(
-        String(100), nullable=False, index=True
+        Text, nullable=False, index=True
     )
 
     jurisdiction: Mapped[str] = mapped_column(
-        String(100), nullable=False, index=True
+        Text, nullable=False, index=True
     )
 
-    court: Mapped[str] = mapped_column(String(150), nullable=False)
+    court: Mapped[str] = mapped_column(String(255), nullable=False)
 
-    authority_level: Mapped[str] = mapped_column(String(100), nullable=False)
+    authority_level: Mapped[str] = mapped_column(String(255), nullable=False)
 
-    tags: Mapped[str] = mapped_column(String(500), nullable=True)
+    tags: Mapped[str] = mapped_column(Text, nullable=True)
 
-    citation: Mapped[str] = mapped_column(String(255), nullable=False)
+    citation: Mapped[str] = mapped_column(Text, nullable=False)
 
     year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
 
-    raw_content_uri: Mapped[str] = mapped_column(String(1000), nullable=False)
+    raw_content_uri: Mapped[str] = mapped_column(Text, nullable=False)
 
-    legal_status: Mapped[str] = mapped_column(String(100), nullable=False)
+    legal_status: Mapped[str] = mapped_column(String(255), nullable=False)
     
     raw_content: Mapped[str] = mapped_column(Text, nullable=False)
 

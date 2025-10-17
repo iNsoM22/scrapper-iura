@@ -1,5 +1,4 @@
 from sqlalchemy import select, desc
-import asyncio
 import json
 from app.database import get_session
 from app.models import RawDocument, Document
@@ -10,8 +9,8 @@ logger = get_logger(__name__)
 
 def process_raw_documents(metadata_id: int, inserted_record_count: int):
     """
-    Processes a batch of RawDocuments by extracting structured data from their PDF content
-    and storing the results in the Document table.
+    Processes RawDocuments and stores structured data in the Document table.
+    Avoids duplicate reference_id/title/doc_type and handles errors per record safely.
     """
 
     try:
@@ -32,26 +31,44 @@ def process_raw_documents(metadata_id: int, inserted_record_count: int):
 
             logger.info(f"Processing {len(raw_docs)} RawDocuments for metadata_id={metadata_id}")
 
-            async def process_all():
-                tasks = []
-                for raw_doc in raw_docs:
+            for raw_doc in raw_docs:
+                try:
+                    # Extract fields
                     payload = json.loads(raw_doc.payload)
                     pdf_text = raw_doc.pdf_raw
-                    tasks.append(extract_fields_from_gemini(payload, pdf_text))
-                return await asyncio.gather(*tasks, return_exceptions=True)
-
-            extracted_results = asyncio.run(process_all())
-
-            for raw_doc, extracted in zip(raw_docs, extracted_results):
-                if isinstance(extracted, Exception):
-                    logger.error(f"Failed to extract for raw_doc id={raw_doc.id}: {extracted}")
+                    extracted = extract_fields_from_gemini(payload, pdf_text)
+                except Exception as e:
+                    logger.error(f"Failed to extract for raw_doc id={raw_doc.id}: {e}")
                     continue
 
                 try:
+                    ref_id = (extracted.get("reference_id") or "Unknown").strip()
+                    title = (extracted.get("title") or "").strip()
+                    doc_type = (extracted.get("doc_type") or "").strip()
+
+                    # Check duplicates in DB
+                    existing = session.scalar(
+                        select(Document).where(Document.reference_id == ref_id)
+                    )
+
+                    # Also check duplicates in pending session
+                    in_session_duplicate = any(
+                        isinstance(obj, Document)
+                        and obj.reference_id == ref_id
+                        for obj in session.new
+                    )
+
+                    if existing or in_session_duplicate:
+                        logger.info(
+                            f"Skipping raw_doc id={raw_doc.id}: duplicate reference_id '{ref_id}'."
+                        )
+                        continue
+
+                    # Create Document
                     doc = Document(
-                        reference_id=extracted.get("reference_id"),
-                        title=extracted.get("title"),
-                        doc_type=extracted.get("doc_type"),
+                        reference_id=ref_id,
+                        title=title,
+                        doc_type=doc_type,
                         jurisdiction=extracted.get("jurisdiction"),
                         court=extracted.get("court"),
                         authority_level=extracted.get("authority_level"),
@@ -62,13 +79,25 @@ def process_raw_documents(metadata_id: int, inserted_record_count: int):
                         legal_status=extracted.get("legal_status"),
                         raw_content=raw_doc.pdf_raw,
                     )
+
                     session.add(doc)
+                    try:
+                        session.flush()
+                        logger.info(f"Inserted Document for raw_doc id={raw_doc.id}")
+                    except Exception as insert_error:
+                        session.rollback()
+                        logger.error(
+                            f"Failed to insert Document for raw_doc id={raw_doc.id}: {insert_error}"
+                        )
+                        continue
+
                 except Exception as e:
-                    logger.exception(f"Failed to prepare Document for raw_doc id={raw_doc.id}")
+                    logger.exception(f"Error preparing Document for raw_doc id={raw_doc.id}")
                     session.rollback()
+                    continue
 
             session.commit()
-            logger.info(f"Successfully stored {len(raw_docs)} documents.")
+            logger.info(f"Completed processing {len(raw_docs)} documents successfully.")
 
     except Exception:
         logger.exception("process_raw_documents failed")

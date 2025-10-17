@@ -129,6 +129,12 @@ if __name__ == "__main__":
     parser.add_argument("--start", type=int, help="Start year (e.g., 1947)")
     parser.add_argument("--end", type=int, help="End year (e.g., 1970)")
     parser.add_argument("--save-interval", type=int, default=20, help="How many rows to buffer before saving")
-    args = parser.parse_args()
+    parser.add_argument("--parse", type=bool, default=False, help="Whether to parse the downloaded PDFs (default: False)")
 
-    crawl_attached(start=args.start, end=args.end, save_interval=args.save_interval)
+    args = parser.parse_args()
+    if not args.parse:
+        crawl_attached(start=args.start, end=args.end, save_interval=args.save_interval)
+    
+    else:
+        from analyzer import process_raw_documents
+        process_raw_documents(metadata_id=4, inserted_record_count=10)

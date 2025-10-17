@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import io
 from dataclasses import dataclass
 from typing import Optional
@@ -20,19 +19,18 @@ class PdfText:
     text: str
     pages: int
 
-
-async def _download_pdf(url: str, client: Optional[httpx.AsyncClient] = None) -> bytes:
-    """Stream-download a PDF from a URL into memory (no disk use)."""
+def _download_pdf(url: str, client: Optional[httpx.Client] = None) -> bytes:
+    """Stream-download a PDF from a URL into memory (no disk use). Synchronous version."""
     close_client = False
     if client is None:
-        client = httpx.AsyncClient(timeout=DEFAULT_TIMEOUT, follow_redirects=True)
+        client = httpx.Client(timeout=DEFAULT_TIMEOUT, follow_redirects=True)
         close_client = True
 
     logger.info(f"Starting download: {url}")
 
     try:
         try:
-            head = await client.head(url)
+            head = client.head(url)
             if not (200 <= head.status_code < 400):
                 logger.warning(f"HEAD request failed for {url}, continuing with GET.")
                 head = None
@@ -49,11 +47,11 @@ async def _download_pdf(url: str, client: Optional[httpx.AsyncClient] = None) ->
                 raise ValueError(f"URL does not appear to be a PDF (content-type: {ctype})")
 
         # Stream the download into memory safely
-        async with client.stream("GET", url) as resp:
+        with client.stream("GET", url) as resp:
             resp.raise_for_status()
             total = 0
             chunks = []
-            async for chunk in resp.aiter_bytes():
+            for chunk in resp.iter_bytes():
                 total += len(chunk)
                 if total > MAX_DOWNLOAD_SIZE:
                     raise ValueError("Download exceeded size limit (50 MB)")
@@ -67,7 +65,7 @@ async def _download_pdf(url: str, client: Optional[httpx.AsyncClient] = None) ->
         raise
     finally:
         if close_client:
-            await client.aclose()
+            client.close()
 
 
 def _extract_text_pypdf(data: bytes) -> tuple[str, int]:
@@ -106,15 +104,15 @@ def _fallback_pdfminer(data: bytes) -> tuple[str, int]:
         raise RuntimeError(f"Failed to extract text with pdfminer: {e}")
 
 
-async def fetch_pdf_text(url: str) -> PdfText:
+def fetch_pdf_text(url: str) -> PdfText:
     """
-    Fully asynchronous function that:
+    Synchronous function that:
     - Downloads a PDF (streamed)
     - Extracts text using pypdf (fallback to pdfminer)
     - Returns PdfText dataclass
     """
     try:
-        data = await _download_pdf(url)
+        data = _download_pdf(url)
     except Exception as e:
         logger.error(f"Download failed for {url}: {e}")
         raise
@@ -133,12 +131,12 @@ async def fetch_pdf_text(url: str) -> PdfText:
 def _sync_main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="Asynchronous PDF text fetcher")
+    parser = argparse.ArgumentParser(description="Synchronous PDF text fetcher")
     parser.add_argument("url", help="URL of the PDF to fetch")
     parser.add_argument("--out", type=str, help="File to write extracted text to")
     args = parser.parse_args()
 
-    result: PdfText = asyncio.run(fetch_pdf_text(args.url))
+    result: PdfText = fetch_pdf_text(args.url)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
             f.write(result.text)
