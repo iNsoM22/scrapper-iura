@@ -6,6 +6,7 @@ from typing import Optional
 import httpx
 from pypdf import PdfReader
 from logger_config import get_logger
+from bs4 import BeautifulSoup
 
 logger = get_logger(__name__)
 
@@ -42,9 +43,9 @@ def _download_pdf(url: str, client: Optional[httpx.Client] = None) -> bytes:
             ctype = head.headers.get("content-type", "").lower()
             length = head.headers.get("content-length")
             if length is not None and int(length) > MAX_DOWNLOAD_SIZE:
-                raise ValueError(f"PDF too large: {length} bytes (limit {MAX_DOWNLOAD_SIZE})")
-            if "pdf" not in ctype and ctype != "application/octet-stream":
-                raise ValueError(f"URL does not appear to be a PDF (content-type: {ctype})")
+                raise ValueError(f"File too large: {length} bytes (limit {MAX_DOWNLOAD_SIZE})")
+            if "pdf" not in ctype and "text" not in ctype and "html" not in ctype:
+                logger.warning(f"Unexpected content-type: {ctype}, proceeding anyway...")
 
         # Stream the download into memory safely
         with client.stream("GET", url) as resp:
@@ -108,7 +109,8 @@ def fetch_pdf_text(url: str) -> PdfText:
     """
     Synchronous function that:
     - Downloads a PDF (streamed)
-    - Extracts text using pypdf (fallback to pdfminer)
+    - Detects if it's actually HTML or plain text instead of a PDF
+    - Extracts text appropriately (PDF via PyPDF/pdfminer, HTML via BeautifulSoup)
     - Returns PdfText dataclass
     """
     try:
@@ -117,6 +119,22 @@ def fetch_pdf_text(url: str) -> PdfText:
         logger.error(f"Download failed for {url}: {e}")
         raise
 
+    try:
+        decoded = data.decode("utf-8", errors="ignore").strip()
+        if len(decoded) > 0:
+            # Check if HTML content
+            if "<html" in decoded.lower() or "<body" in decoded.lower():
+                soup = BeautifulSoup(decoded, "html.parser")
+                text = soup.get_text(separator="\n", strip=True)
+                logger.info(f"Extracted text from HTML page: {url}")
+                return PdfText(url=url, text=text, pages=1)
+
+            if all(ch.isprintable() or ch.isspace() for ch in decoded[:1000]):
+                logger.info(f"Detected plain text content instead of PDF: {url}")
+                return PdfText(url=url, text=decoded, pages=1)
+    except Exception as e:
+        logger.warning(f"Text/HTML detection failed, assuming PDF: {e}")
+        
     try:
         text, pages = _extract_text_pypdf(data)
         if text.strip():
