@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass
+import re
 from typing import Optional
 import httpx
 from pypdf import PdfReader
@@ -44,8 +45,17 @@ def _download_pdf(url: str, client: Optional[httpx.Client] = None) -> bytes:
             length = head.headers.get("content-length")
             if length is not None and int(length) > MAX_DOWNLOAD_SIZE:
                 raise ValueError(f"File too large: {length} bytes (limit {MAX_DOWNLOAD_SIZE})")
-            if "pdf" not in ctype and "text" not in ctype and "html" not in ctype:
-                logger.warning(f"Unexpected content-type: {ctype}, proceeding anyway...")
+            
+            if length is not None and int(length) == 0:
+                raise ValueError(f"File at {url} is empty (0 bytes).")
+            
+            if (
+                "pdf" not in ctype
+                and "text" not in ctype
+                and "html" not in ctype
+                and "octet-stream" not in ctype
+            ):
+                logger.warning(f"Unexpected content-type ({ctype}), proceeding anyway...")
 
         # Stream the download into memory safely
         with client.stream("GET", url) as resp:
@@ -59,7 +69,15 @@ def _download_pdf(url: str, client: Optional[httpx.Client] = None) -> bytes:
                 chunks.append(chunk)
 
         logger.info(f"Successfully downloaded {total / 1024:.2f} KB from {url}")
-        return b"".join(chunks)
+        data = b"".join(chunks)
+        
+        if not data or len(data) < 500:
+            raise ValueError(f"Downloaded file from {url} is too small or empty ({len(data)} bytes).")
+
+        if not data.strip().startswith(b"%PDF"):
+            logger.warning(f"File from {url} does not start with '%PDF', may not be a valid PDF.")
+                
+        return data
 
     except Exception as e:
         logger.exception(f"Failed to download PDF from {url}: {e}")
@@ -105,13 +123,21 @@ def _fallback_pdfminer(data: bytes) -> tuple[str, int]:
         raise RuntimeError(f"Failed to extract text with pdfminer: {e}")
 
 
+def _sanitize_text(text: str) -> str:
+    """Remove NUL and other control characters that break PostgreSQL."""
+    # Remove NUL (0x00) and other problematic control characters
+    # Keep tab (0x09), newline (0x0A), and carriage return (0x0D)
+    sanitized = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", text)
+    return sanitized.strip()
+
+
 def fetch_pdf_text(url: str) -> PdfText:
     """
     Synchronous function that:
     - Downloads a PDF (streamed)
     - Detects if it's actually HTML or plain text instead of a PDF
     - Extracts text appropriately (PDF via PyPDF/pdfminer, HTML via BeautifulSoup)
-    - Returns PdfText dataclass
+    - Returns PdfText dataclass with sanitized text
     """
     try:
         data = _download_pdf(url)
@@ -126,24 +152,34 @@ def fetch_pdf_text(url: str) -> PdfText:
             if "<html" in decoded.lower() or "<body" in decoded.lower():
                 soup = BeautifulSoup(decoded, "html.parser")
                 text = soup.get_text(separator="\n", strip=True)
+                text = _sanitize_text(text)
                 logger.info(f"Extracted text from HTML page: {url}")
                 return PdfText(url=url, text=text, pages=1)
 
             if all(ch.isprintable() or ch.isspace() for ch in decoded[:1000]):
                 logger.info(f"Detected plain text content instead of PDF: {url}")
-                return PdfText(url=url, text=decoded, pages=1)
+                text = _sanitize_text(decoded)
+                return PdfText(url=url, text=text, pages=1)
     except Exception as e:
         logger.warning(f"Text/HTML detection failed, assuming PDF: {e}")
         
     try:
         text, pages = _extract_text_pypdf(data)
-        if text.strip():
+        text = _sanitize_text(text)
+        if text:
             return PdfText(url=url, text=text, pages=pages)
     except Exception:
         logger.warning(f"PyPDF extraction failed for {url}, switching to pdfminer...")
 
-    text, pages = _fallback_pdfminer(data)
-    return PdfText(url=url, text=text, pages=pages)
+    try:
+        text, pages = _fallback_pdfminer(data)
+        text = _sanitize_text(text)
+        if not text:
+            raise ValueError("No text could be extracted from this file.")
+        return PdfText(url=url, text=text, pages=pages)
+    
+    except Exception as e:
+        logger.warning(f"Skipping {url}: both PyPDF and pdfminer failed. Reason: {e}")
 
 
 def _sync_main():

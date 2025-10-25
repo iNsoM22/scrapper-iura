@@ -1,11 +1,21 @@
 from sqlalchemy import select, desc
 import json
+import re
 from app.database import get_session
 from app.models import RawDocument, Document
 from app.gemini import extract_fields_from_gemini
 from app.logger_config import get_logger
 
 logger = get_logger(__name__)
+
+
+def _sanitize_for_db(text: str) -> str:
+    """Remove NUL and other control characters that break PostgreSQL."""
+    if not text:
+        return text
+    # Remove NUL (0x00) and other problematic control characters
+    # Keep tab (0x09), newline (0x0A), and carriage return (0x0D)
+    return re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", text)
 
 def process_raw_documents(metadata_id: int, inserted_record_count: int):
     """
@@ -64,20 +74,20 @@ def process_raw_documents(metadata_id: int, inserted_record_count: int):
                         )
                         continue
 
-                    # Create Document
+                    # Create Document with sanitized fields
                     doc = Document(
-                        reference_id=ref_id,
-                        title=title,
-                        doc_type=doc_type,
-                        jurisdiction=extracted.get("jurisdiction"),
-                        court=extracted.get("court"),
-                        authority_level=extracted.get("authority_level"),
-                        tags=extracted.get("tags"),
-                        citation=extracted.get("citation"),
+                        reference_id=_sanitize_for_db(ref_id),
+                        title=_sanitize_for_db(title),
+                        doc_type=_sanitize_for_db(doc_type),
+                        jurisdiction=_sanitize_for_db(extracted.get("jurisdiction") or ""),
+                        court=_sanitize_for_db(extracted.get("court") or ""),
+                        authority_level=_sanitize_for_db(extracted.get("authority_level") or ""),
+                        tags=_sanitize_for_db(extracted.get("tags") or ""),
+                        citation=_sanitize_for_db(extracted.get("citation") or ""),
                         year=int(str(extracted.get("date", "")).split("-")[0]) if extracted.get("date") else 0,
-                        raw_content_uri=raw_doc.pdf_uri,
-                        legal_status=extracted.get("legal_status"),
-                        raw_content=raw_doc.pdf_raw,
+                        raw_content_uri=_sanitize_for_db(raw_doc.pdf_uri),
+                        legal_status=_sanitize_for_db(extracted.get("legal_status") or ""),
+                        raw_content=_sanitize_for_db(raw_doc.pdf_raw),
                     )
 
                     session.add(doc)

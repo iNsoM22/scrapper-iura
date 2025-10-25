@@ -21,7 +21,11 @@ def _build_driver_attach():
     return webdriver.Edge(options=options)
 
 
-def crawl_attached(start: int | None = None, end: int | None = None, save_interval: int = 20):
+def crawl_attached(start: int | None = None,
+                   end: int | None = None,
+                   save_interval: int = 20,
+                   skip: int = 0):
+    
     driver = _build_driver_attach()
     print("Attached to existing Edge session!")
     print("Current URL:", driver.current_url)
@@ -66,6 +70,11 @@ def crawl_attached(start: int | None = None, end: int | None = None, save_interv
             print(f"Found {len(rows)} rows for year {year}")
 
             for i in range(len(rows)):
+                if i < skip:
+                    actions.scroll_by_amount(0, 150).perform()
+                    time.sleep(0.5)
+                    continue
+                
                 retry_count = 0
                 while retry_count < 3:  # Retry stale elements a few times
                     try:
@@ -140,11 +149,12 @@ if __name__ == "__main__":
     parser.add_argument("--end", type=int, help="End year (e.g., 1970)")
     parser.add_argument("--save-interval", type=int, default=20, help="How many rows to buffer before saving")
     parser.add_argument("--parse", type=bool, default=False, help="Whether to parse the downloaded PDFs (default: False)")
+    parser.add_argument("--skip", type=int, default=0, help="Number of rows to skip (default: 0)")
 
     args = parser.parse_args()
     if not args.parse:
-        crawl_attached(start=args.start, end=args.end, save_interval=args.save_interval)
-    
+        crawl_attached(start=args.start, end=args.end, save_interval=args.save_interval, skip=args.skip)
+
     else:
         from analyzer import process_raw_documents
         process_raw_documents(metadata_id=4, inserted_record_count=10)

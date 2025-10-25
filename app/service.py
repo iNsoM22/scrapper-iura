@@ -5,9 +5,19 @@ from app.models import MetadataRaw, RawDocument
 from app.pdf_collector import fetch_pdf_text
 from app.logger_config import get_logger
 import json
+import re
 from app.analyzer import process_raw_documents
 
 logger = get_logger(__name__)
+
+
+def _sanitize_for_db(text: str) -> str:
+    """Remove NUL and other control characters that break PostgreSQL."""
+    if not text:
+        return text
+    # Remove NUL (0x00) and other problematic control characters
+    # Keep tab (0x09), newline (0x0A), and carriage return (0x0D)
+    return re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", text)
 
 
 def store_raw_metadata(uri: str, delimiter: str, structure: list[str]) -> int:
@@ -109,9 +119,9 @@ def store_batch_records(metadata_id: int, data: list[dict], pdf_link_key: str):
             for entry in processed:
                 doc = RawDocument(
                     metadata_id=metadata_id,
-                    payload=entry["payload"],
-                    pdf_uri=entry["pdf_uri"],
-                    pdf_raw=entry["pdf_raw"],
+                    payload=_sanitize_for_db(entry["payload"]),
+                    pdf_uri=_sanitize_for_db(entry["pdf_uri"]),
+                    pdf_raw=_sanitize_for_db(entry["pdf_raw"]),
                 )
                 session.add(doc)
 
