@@ -1,7 +1,4 @@
-from sqlalchemy import String, select
-from sqlalchemy.exc import IntegrityError
-from app.database import get_session
-from app.models import MetadataRaw, RawDocument
+from app.database import get_supabase
 from app.pdf_collector import fetch_pdf_text
 from app.logger_config import get_logger
 import json
@@ -26,63 +23,60 @@ def store_raw_metadata(uri: str, delimiter: str, structure: list[str]) -> int:
     Ensures no duplicate record exists with the same (uri, delimiter, structure).
     Returns the ID of the stored or existing record.
     """
-    with get_session() as session:
-        try:
-            # Check if record already exists
-            existing = session.scalar(
-                select(MetadataRaw)
-                .where(
-                    MetadataRaw.fetch_uri == uri,
-                    MetadataRaw.delimiter == delimiter,
-                    MetadataRaw.structure.cast(String) == json.dumps(structure)
-                )
-            )
+    supabase = get_supabase()
+    
+    try:
+        # Check if record already exists
+        result = supabase.table("metadata_raw").select("id").eq("fetch_uri", uri).eq("delimiter", delimiter).execute()
+        
+        # Additional check for structure match (JSON comparison)
+        if result.data:
+            for record in result.data:
+                # Fetch full record to compare structure
+                full_record = supabase.table("metadata_raw").select("*").eq("fetch_uri", record["id"],
+                                                                            ""
+                                                                            ).execute()
+                if full_record.data and full_record.data[0]["structure"] == structure:
+                    logger.info(
+                        f"Metadata already exists for URI={uri}, delimiter={delimiter}, structure={structure}"
+                    )
+                    return full_record.data[0]["id"]
 
-            if existing:
-                logger.info(
-                    f"Metadata already exists for URI={uri}, delimiter={delimiter}, structure={structure}"
-                )
-                return existing.id
-
-            # Otherwise, create a new record
-            meta = MetadataRaw(
-                fetch_uri=uri,
-                delimiter=delimiter,
-                structure=structure,
-            )
-            session.add(meta)
-            session.commit()
-            session.refresh(meta)
-
+        # Otherwise, create a new record
+        new_meta = {
+            "fetch_uri": uri,
+            "delimiter": delimiter,
+            "structure": structure,
+        }
+        
+        insert_result = supabase.table("metadata_raw").insert(new_meta).execute()
+        
+        if insert_result.data:
+            meta_id = insert_result.data[0]["id"]
             logger.info(
-                f"Stored new metadata entry (ID={meta.id}) for URI={uri}, delimiter={delimiter}"
+                f"Stored new metadata entry (ID={meta_id}) for URI={uri}, delimiter={delimiter}"
             )
-            return meta.id
+            return meta_id
+        else:
+            logger.error(f"Failed to insert metadata for URI={uri}")
+            return None
 
-        except IntegrityError:
-            session.rollback()
-            existing = session.scalar(
-                select(MetadataRaw)
-                .where(
-                    MetadataRaw.fetch_uri == uri,
-                    MetadataRaw.delimiter == delimiter,
-                    MetadataRaw.structure == structure,
-                )
-            )
-            if existing:
-                logger.warning(
-                    f"Duplicate metadata found, returning existing ID={existing.id} "
-                    f"for URI={uri}, delimiter={delimiter}"
-                )
-                return existing.id
-            else:
-                logger.error(f"IntegrityError occurred, but no existing record found for URI={uri}")
-                return None
-
-        except Exception as e:
-            session.rollback()
-            logger.exception(f"Unexpected error in store_raw_metadata for URI={uri}: {e}")
-            raise
+    except Exception as e:
+        logger.exception(f"Unexpected error in store_raw_metadata for URI={uri}: {e}")
+        # Try to fetch existing record in case of conflict
+        try:
+            result = supabase.table("metadata_raw").select("*").eq("fetch_uri", uri).eq("delimiter", delimiter).execute()
+            if result.data:
+                for record in result.data:
+                    if record["structure"] == structure:
+                        logger.warning(
+                            f"Duplicate metadata found, returning existing ID={record['id']} "
+                            f"for URI={uri}, delimiter={delimiter}"
+                        )
+                        return record["id"]
+        except Exception:
+            pass
+        raise
 
 
 
@@ -94,6 +88,7 @@ def store_batch_records(metadata_id: int, data: list[dict], pdf_link_key: str):
     - Fetches and extracts text from the PDF using pdf_collector.
     - Stores payload and extracted PDF text.
     """
+    supabase = get_supabase()
 
     try:
         processed = []
@@ -108,30 +103,24 @@ def store_batch_records(metadata_id: int, data: list[dict], pdf_link_key: str):
                 logger.info(f"Extracted {pdf_info.pages} pages from PDF: {pdf_url}")
 
                 processed.append({
-                    "payload": json.dumps(record),
-                    "pdf_uri": pdf_url,
-                    "pdf_raw": pdf_info.text,
+                    "metadata_id": metadata_id,
+                    "payload": _sanitize_for_db(json.dumps(record)),
+                    "pdf_uri": _sanitize_for_db(pdf_url),
+                    "pdf_raw": _sanitize_for_db(pdf_info.text),
                 })
             except Exception as e:
                 logger.warning(f"Skipping record due to PDF error: {e}")
 
-        with get_session() as session:
-            for entry in processed:
-                doc = RawDocument(
-                    metadata_id=metadata_id,
-                    payload=_sanitize_for_db(entry["payload"]),
-                    pdf_uri=_sanitize_for_db(entry["pdf_uri"]),
-                    pdf_raw=_sanitize_for_db(entry["pdf_raw"]),
-                )
-                session.add(doc)
-
-            session.commit()
+        if processed:
+            # Insert all processed records using Supabase
+            insert_result = supabase.table("raw_documents").insert(processed).execute()
+            
             logger.info(
                 f"Stored {len(processed)} raw documents successfully for metadata_id={metadata_id}"
             )
-        process_raw_documents(metadata_id, len(processed))
-            
-        
+            process_raw_documents(metadata_id, len(processed))
+        else:
+            logger.warning(f"No records to store for metadata_id={metadata_id}")
 
     except Exception as e:
         logger.exception(f"Failed to store batch records for metadata_id={metadata_id}: {e}")
