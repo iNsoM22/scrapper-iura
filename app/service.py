@@ -33,9 +33,7 @@ def store_raw_metadata(uri: str, delimiter: str, structure: list[str]) -> int:
         if result.data:
             for record in result.data:
                 # Fetch full record to compare structure
-                full_record = supabase.table("metadata_raw").select("*").eq("fetch_uri", record["id"],
-                                                                            ""
-                                                                            ).execute()
+                full_record = supabase.table("metadata_raw").select("*").eq("fetch_uri", record["id"]).execute()
                 if full_record.data and full_record.data[0]["structure"] == structure:
                     logger.info(
                         f"Metadata already exists for URI={uri}, delimiter={delimiter}, structure={structure}"
