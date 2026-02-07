@@ -1,5 +1,8 @@
 .venv
 .env
+keys.json
+downloads/
+
 logs/
 */__pycache__
 */*/__pycache__
