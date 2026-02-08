@@ -41,12 +41,17 @@ def main():
                 logger.info("Connected to browser successfully.")
                 
                 while True:
-                    user_input = input("\nPress Enter to start/continue scraping (or 'q' to quit): ")
+                    user_input = input("\nPress Enter to start/continue (or enter skip count, e.g. '40', or 'q' to quit): ")
                     if user_input.lower() == 'q':
                         break
                     
+                    skip_count = 0
+                    if user_input.strip().isdigit():
+                        skip_count = int(user_input.strip())
+                        logger.info(f"Skipping first {skip_count} records.")
+                    
                     logger.info("Starting scrape...")
-                    scraper.scrape()
+                    scraper.scrape(skip_count=skip_count)
                     logger.info("Batch completed. Waiting for input...")
             except Exception as e:
                 logger.error(f"Scraper failed: {e}")
