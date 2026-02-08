@@ -65,7 +65,7 @@ class SHCScraper(BaseScraper):
             logger.error(f"Error extracting PDF text from {pdf_path}: {e}")
             return ""
 
-    def scrape(self):
+    def scrape(self, skip_count: int = 0):
         """Scrapes the SHC website table."""
         if not self.page:
             logger.error("No page connected.")
@@ -84,6 +84,9 @@ class SHCScraper(BaseScraper):
             logger.info(f"Found {len(rows)} rows visible.")
 
             for i, row in enumerate(rows):
+                if i < skip_count:
+                    continue
+
                 # Retry Logic (3 attempts)
                 pdf_text = ""
                 pdf_filename = ""
@@ -235,6 +238,7 @@ class SHCScraper(BaseScraper):
                         self.db.commit()
                         processed_case_nos.add(case_no_raw)
                         logger.info(f"Saved Case {final_reference_id}")
+                        time.sleep(5) # Delay to respect API limits
                         break # Success
 
                     except Exception as row_err:
@@ -275,6 +279,7 @@ class SHCScraper(BaseScraper):
                                  self.db.commit()
                                  processed_case_nos.add(case_no_raw)
                                  logger.info(f"Saved Partial Case {case_no_raw}")
+                                 time.sleep(5) # Delay to respect API limits
                              except Exception as save_err:
                                  logger.error(f"Failed to save partial record: {save_err}")
                                  self.db.rollback()
