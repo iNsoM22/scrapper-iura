@@ -13,6 +13,7 @@ from app.database import get_db
 
 import logging
 import requests
+import re
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
 # Suppress only the single warning from urllib3 needed.
@@ -92,6 +93,7 @@ class SHCScraper(BaseScraper):
                 pdf_filename = ""
                 pdf_url = ""
                 extracted_data = {}
+                time.sleep(2)
                 
                 for attempt in range(3):
                     try:
@@ -145,13 +147,13 @@ class SHCScraper(BaseScraper):
                                     # Heuristic: URL ends with .pdf OR contains 'view-file' (common pattern)
                                     is_pdf_candidate = pdf_url.lower().endswith('.pdf') or 'view-file' in pdf_url.lower()
                                     
+                                    processed_as_pdf = False
                                     if is_pdf_candidate:
-                                         import requests
-                                         # Stream to check headers first if needed, but we'll just download
-                                         response = requests.get(pdf_url, stream=True, verify=False)
+                                         # Stream to check headers first
+                                         response = requests.get(pdf_url, stream=True, verify=False, timeout=30)
                                          
                                          content_type = response.headers.get('Content-Type', '').lower()
-                                         if response.status_code == 200:
+                                         if 'application/pdf' in content_type:
                                              # Determine filename
                                              basename = os.path.basename(pdf_url).split('?')[0]
                                              if not basename.lower().endswith('.pdf'):
@@ -165,13 +167,22 @@ class SHCScraper(BaseScraper):
                                              
                                              logger.info(f"Downloaded PDF from {pdf_url} (Type: {content_type})")
                                              pdf_text = self._extract_pdf_text(pdf_filename)
+                                             processed_as_pdf = True
                                          else:
-                                             logger.warning(f"Failed to download PDF. Status: {response.status_code}")
-                                    else:
-                                        # Assume HTML content
-                                        pdf_text = new_page.locator("body").inner_text()
-                                        logger.info("Extracted text from HTML Judgement page.")
-                                        pdf_filename = pdf_url
+                                             logger.info(f"Link target is not a PDF (Type: {content_type}). Processing as HTML.")
+                                    
+                                    if not processed_as_pdf:
+                                        # Use page inner_text for HTML content
+                                        # Sometimes the text is inside a specific element, but body is safest
+                                        raw_text = new_page.locator("body").inner_text()
+                                        
+                                        # Cleanup: Consolidate multiple spaces/newlines for better LLM context
+                                        processed_text = re.sub(r'\n\s*\n', '\n\n', raw_text) # Consolidate multiple newlines
+                                        processed_text = re.sub(r' +', ' ', processed_text) # Consolidate spaces
+                                        
+                                        pdf_text = processed_text.strip()
+                                        logger.info(f"Extracted {len(pdf_text)} chars from HTML content.")
+                                        pdf_filename = pdf_url # Store URL as filename reference for HTML logs
 
                                 except Exception as tab_err:
                                     logger.warning(f"Error processing PDF tab: {tab_err}")
